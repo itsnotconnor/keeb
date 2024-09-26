@@ -5,6 +5,10 @@ use esp32_nimble::{
     enums::*, hid::*, utilities::mutex::Mutex, BLEAdvertisementData, BLECharacteristic, BLEDevice,
     BLEHIDDevice, BLEServer,
 };
+
+use esp_idf_svc::hal::gpio::*;
+use esp_idf_svc::hal::peripherals::Peripherals;
+
 use std::sync::Arc;
 
 const KEEB_NAME: &str = "?deadbeef";
@@ -217,6 +221,7 @@ struct KeyReport {
 }
 
 struct Keyboard {
+    hid: BLEHIDDevice,
     server: &'static mut BLEServer,
     input_keyboard: Arc<Mutex<BLECharacteristic>>,
     output_keyboard: Arc<Mutex<BLECharacteristic>>,
@@ -240,13 +245,13 @@ impl Keyboard {
         let output_keyboard = hid.output_report(KEYBOARD_ID);
         let input_media_keys = hid.input_report(MEDIA_KEYS_ID);
 
+        hid.set_battery_level(100);
+
         hid.manufacturer("Espressif");
         hid.pnp(0x02, 0x05ac, 0x820a, 0x0210);
         hid.hid_info(0x00, 0x01);
 
         hid.report_map(HID_REPORT_DISCRIPTOR);
-
-        hid.set_battery_level(100);
 
         let ble_advertising = device.get_advertising();
         ble_advertising.lock().scan_response(false).set_data(
@@ -258,6 +263,7 @@ impl Keyboard {
         ble_advertising.lock().start()?;
 
         Ok(Self {
+            hid,
             server,
             input_keyboard,
             output_keyboard,
@@ -301,6 +307,15 @@ impl Keyboard {
         self.input_keyboard.lock().set_from(keys).notify();
         esp_idf_svc::hal::delay::Ets::delay_ms(7);
     }
+
+    fn update_battery_status(&mut self) -> u8 {
+        //ADC Read
+        let battery_status_percentage: u8 = 99;
+
+        //Set latest battery value
+        self.hid.set_battery_level(battery_status_percentage);
+        return battery_status_percentage;
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -309,14 +324,55 @@ fn main() -> anyhow::Result<()> {
 
     let mut keyboard = Keyboard::new()?;
 
+    // GPIO Map [0-8]
+    // IO9 - BOOT DO NOT USE
+    // IO10 - LED DO NOT USE
+    //let battery_voltage_adc_pin: esp_idf_svc::hal::gpio::ADCPin =
+
+    let peripherals = Peripherals::take()?;
+    let mut led = PinDriver::output(peripherals.pins.gpio10)?;
+
+    let mut key_02 = PinDriver::input(peripherals.pins.gpio2)?;
+
+    key_02.set_pull(Pull::Down)?;
+
+    if key_02.is_high() {
+        led.set_low()?;
+    } else {
+        led.set_high()?;
+    }
+
+    // struct KeyRows {
+    //     gpio_00: esp_idf_svc::hal::gpio::Pin,
+    //     gpio_01: esp_idf_svc::hal::gpio::Pin,
+    //     gpio_02: esp_idf_svc::hal::gpio::Pin,
+    //     gpio_03: esp_idf_svc::hal::gpio::Pin,
+    // }
+
+    // struct KeyCols {
+    //     gpio_04: esp_idf_svc::hal::gpio::Pin,
+    //     gpio_05: esp_idf_svc::hal::gpio::Pin,
+    //     gpio_06: esp_idf_svc::hal::gpio::Pin,
+    //     gpio_07: esp_idf_svc::hal::gpio::Pin,
+    //     gpio_08: esp_idf_svc::hal::gpio::Pin,
+    // }
+
     loop {
         if keyboard.connected() {
+            //Setup key map
+
+            // let my_key_pins : KeyPins = KeyPins{
+            //     gpio_00 =
+            // }
+
             //Log Status
             ::log::info!("Sending 'Hello worlds!'...");
 
             // Simulate key press
             keyboard.write("Hello worlds\n");
         }
+
+        // Delay end of tasks
         esp_idf_svc::hal::delay::FreeRtos::delay_ms(3000);
     }
 }
